@@ -1,0 +1,126 @@
+.add-album-page {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.page-breadcrumb {
+  margin-bottom: var(--space-xl);
+}
+
+.breadcrumb-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  transition: color var(--transition-fast);
+}
+
+.breadcrumb-link:hover {
+  color: var(--color-primary);
+}
+
+.add-album-container {
+  background: var(--color-bg-card);
+  border-radius: var(--radius-xl);
+  padding: var(--space-2xl);
+  box-shadow: 0 2px 8px var(--color-shadow);
+}
+
+.add-album-header {
+  text-align: center;
+  margin-bottom: var(--space-2xl);
+}
+
+.add-album-icon {
+  font-size: 3rem;
+  margin-bottom: var(--space-md);
+}
+
+.add-album-header h1 {
+  font-size: 1.5rem;
+  margin-bottom: var(--space-sm);
+}
+
+.add-album-header p {
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+}
+
+.add-album-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  background: rgba(212, 107, 107, 0.1);
+  border: 1px solid rgba(212, 107, 107, 0.3);
+  border-radius: var(--radius-md);
+  color: var(--color-danger);
+  font-size: 0.9rem;
+  margin-bottom: var(--space-lg);
+}
+
+.form-error .error-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: var(--color-danger);
+  color: white;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.form-label .required {
+  color: var(--color-danger);
+}
+
+.form-label .optional {
+  color: var(--color-text-muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 100px;
+}
+
+.form-hint {
+  display: block;
+  margin-top: var(--space-xs);
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  text-align: right;
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--space-md);
+  justify-content: flex-end;
+  margin-top: var(--space-lg);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--color-border-light);
+}
+
+@media (max-width: 480px) {
+  .add-album-container {
+    padding: var(--space-lg);
+  }
+  
+  .form-actions {
+    flex-direction: column-reverse;
+  }
+  
+  .form-actions .btn {
+    width: 100%;
+  }
+}

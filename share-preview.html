@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>공유 링크 미리보기 - 일상 기록</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&family=Playfair+Display:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --color-bg: #faf8f5;
+      --color-bg-secondary: #f5f2ed;
+      --color-bg-card: #ffffff;
+      --color-text: #2d2a26;
+      --color-text-secondary: #6b6560;
+      --color-text-muted: #9a948d;
+      --color-primary: #c4785a;
+      --color-accent: #8b9e7c;
+      --color-accent-light: rgba(139, 158, 124, 0.15);
+      --color-border: #e8e4de;
+      --color-border-light: #f0ece6;
+      --color-shadow: rgba(45, 42, 38, 0.08);
+      --color-shadow-hover: rgba(45, 42, 38, 0.15);
+      --font-display: 'Playfair Display', Georgia, serif;
+      --font-body: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, sans-serif;
+      --space-xs: 0.25rem;
+      --space-sm: 0.5rem;
+      --space-md: 1rem;
+      --space-lg: 1.5rem;
+      --space-xl: 2rem;
+      --space-2xl: 3rem;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-xl: 20px;
+      --transition-base: 250ms ease;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      font-family: var(--font-body);
+      background: radial-gradient(ellipse at top left, rgba(196, 120, 90, 0.05) 0%, transparent 50%),
+                  radial-gradient(ellipse at bottom right, rgba(139, 158, 124, 0.05) 0%, transparent 50%),
+                  var(--color-bg);
+      color: var(--color-text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(250, 248, 245, 0.9);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--color-border-light);
+    }
+
+    .header-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: var(--space-md) var(--space-lg);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      text-decoration: none;
+      color: var(--color-text);
+    }
+
+    .logo-icon {
+      font-size: 1.5rem;
+      color: var(--color-primary);
+    }
+
+    .logo-text {
+      font-family: var(--font-display);
+      font-size: 1.5rem;
+      font-weight: 600;
+    }
+
+    .guest-badge {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-sm) var(--space-md);
+      background: var(--color-accent-light);
+      color: var(--color-accent);
+      border-radius: var(--radius-xl);
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+
+    /* Main */
+    .main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: var(--space-2xl) var(--space-lg);
+    }
+
+    /* Notice Banner */
+    .shared-notice {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-md) var(--space-lg);
+      background: var(--color-accent-light);
+      color: var(--color-accent);
+      border-radius: var(--radius-lg);
+      margin-bottom: var(--space-xl);
+      font-size: 0.9rem;
+      animation: fadeIn 0.5s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Album Header */
+    .album-header {
+      padding: var(--space-xl);
+      background: var(--color-bg-card);
+      border-radius: var(--radius-xl);
+      box-shadow: 0 2px 8px var(--color-shadow);
+      margin-bottom: var(--space-xl);
+      animation: fadeIn 0.5s ease 0.1s both;
+    }
+
+    .album-header h1 {
+      font-family: var(--font-display);
+      font-size: 1.75rem;
+      margin-bottom: var(--space-sm);
+    }
+
+    .album-description {
+      color: var(--color-text-secondary);
+      margin-bottom: var(--space-md);
+    }
+
+    .album-info {
+      display: flex;
+      gap: var(--space-lg);
+    }
+
+    .info-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-xs);
+      color: var(--color-text-muted);
+      font-size: 0.9rem;
+    }
+
+    /* Image Grid */
+    .image-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: var(--space-md);
+      animation: fadeIn 0.5s ease 0.2s both;
+    }
+
+    .image-card {
+      aspect-ratio: 1 / 1;
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      cursor: pointer;
+      background: var(--color-bg-secondary);
+      box-shadow: 0 2px 8px var(--color-shadow);
+      transition: all var(--transition-base);
+    }
+
+    .image-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px var(--color-shadow-hover);
+    }
+
+    .image-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.4s ease;
+    }
+
+    .image-card:hover img {
+      transform: scale(1.05);
+    }
+
+    /* Footer */
+    .footer {
+      border-top: 1px solid var(--color-border-light);
+      padding: var(--space-xl) 0;
+      margin-top: var(--space-2xl);
+      text-align: center;
+      color: var(--color-text-muted);
+      font-size: 0.875rem;
+    }
+
+    /* Modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: var(--space-lg);
+      backdrop-filter: blur(4px);
+    }
+
+    .modal-overlay.active {
+      display: flex;
+    }
+
+    .modal {
+      max-width: 900px;
+      max-height: 90vh;
+      width: 100%;
+      background: var(--color-bg-card);
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+      animation: scaleIn 0.25s ease;
+    }
+
+    @keyframes scaleIn {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    .modal-close {
+      position: absolute;
+      top: var(--space-md);
+      right: var(--space-md);
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      font-size: 1.25rem;
+      cursor: pointer;
+      z-index: 10;
+    }
+
+    .modal-image {
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      max-height: 60vh;
+    }
+
+    .modal-image img {
+      max-width: 100%;
+      max-height: 60vh;
+      object-fit: contain;
+    }
+
+    .modal-info {
+      padding: var(--space-xl);
+    }
+
+    .modal-info h2 {
+      font-family: var(--font-display);
+      font-size: 1.5rem;
+      margin-bottom: var(--space-sm);
+    }
+
+    .modal-info p {
+      color: var(--color-text-secondary);
+      margin-bottom: var(--space-md);
+    }
+
+    .modal-meta {
+      color: var(--color-text-muted);
+      font-size: 0.9rem;
+    }
+
+    /* URL Bar */
+    .url-bar {
+      background: #2d2a26;
+      color: #9a948d;
+      padding: var(--space-sm) var(--space-md);
+      font-family: monospace;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+
+    .url-bar .dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .url-bar .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .url-bar .dot.red { background: #ff5f56; }
+    .url-bar .dot.yellow { background: #ffbd2e; }
+    .url-bar .dot.green { background: #27ca40; }
+
+    .url-bar .url {
+      flex: 1;
+      background: #1a1918;
+      padding: var(--space-xs) var(--space-md);
+      border-radius: var(--radius-md);
+      color: #e8e4de;
+    }
+
+    .url-bar .url span {
+      color: var(--color-accent);
+    }
+  </style>
+</head>
+<body>
+  <!-- Fake Browser URL Bar -->
+  <div class="url-bar">
+    <div class="dots">
+      <div class="dot red"></div>
+      <div class="dot yellow"></div>
+      <div class="dot green"></div>
+    </div>
+    <div class="url">localhost:5173<span>/share/123</span></div>
+  </div>
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-container">
+      <a href="#" class="logo">
+        <span class="logo-icon">◈</span>
+        <span class="logo-text">Album</span>
+      </a>
+      <span class="guest-badge">
+        <span>👁</span>
+        보기 전용
+      </span>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="main">
+    <!-- Notice Banner -->
+    <div class="shared-notice">
+      <span>👁</span>
+      <span>공유 링크로 접속하셨습니다. 앨범을 보기만 할 수 있습니다.</span>
+    </div>
+
+    <!-- Album Header -->
+    <div class="album-header">
+      <h1>일상 기록</h1>
+      <p class="album-description">소소한 일상의 아름다운 순간들을 담았습니다</p>
+      <div class="album-info">
+        <span class="info-item">
+          <span>📷</span>
+          2장의 사진
+        </span>
+        <span class="info-item">
+          <span>📅</span>
+          2025-09-01
+        </span>
+      </div>
+      <!-- 버튼 없음! 공유 링크 사용자이므로 -->
+    </div>
+
+    <!-- Image Grid -->
+    <div class="image-grid">
+      <div class="image-card" onclick="openModal(0)">
+        <img src="https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=400&h=400&fit=crop" alt="아침 커피">
+      </div>
+      <div class="image-card" onclick="openModal(1)">
+        <img src="https://images.unsplash.com/photo-1476820865390-c52aeebb9891?w=400&h=400&fit=crop" alt="산책로">
+      </div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p>© 2025 Album Sharing. Made with ♥</p>
+  </footer>
+
+  <!-- Image Modal -->
+  <div class="modal-overlay" id="modal" onclick="closeModal(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <button class="modal-close" onclick="closeModal()">✕</button>
+      <div class="modal-image">
+        <img id="modal-img" src="" alt="">
+      </div>
+      <div class="modal-info">
+        <h2 id="modal-title"></h2>
+        <p id="modal-desc"></p>
+        <div class="modal-meta">
+          <span>📅</span>
+          <span id="modal-date"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const images = [
+      {
+        url: 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=800',
+        name: '아침 커피',
+        description: '오늘 하루를 시작하는 따뜻한 커피 한 잔',
+        date: '2025-09-01'
+      },
+      {
+        url: 'https://images.unsplash.com/photo-1476820865390-c52aeebb9891?w=800',
+        name: '산책로',
+        description: '퇴근 후 걷는 공원 산책로',
+        date: '2025-09-05'
+      }
+    ];
+
+    function openModal(index) {
+      const img = images[index];
+      document.getElementById('modal-img').src = img.url;
+      document.getElementById('modal-title').textContent = img.name;
+      document.getElementById('modal-desc').textContent = img.description;
+      document.getElementById('modal-date').textContent = img.date;
+      document.getElementById('modal').classList.add('active');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeModal(event) {
+      if (!event || event.target === document.getElementById('modal')) {
+        document.getElementById('modal').classList.remove('active');
+        document.body.style.overflow = '';
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeModal();
+    });
+  </script>
+</body>
+</html>
