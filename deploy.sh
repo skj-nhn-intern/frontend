@@ -163,10 +163,10 @@ if [ -z "$DIST_DIR" ] || [ ! -d "dist" ]; then
     if ! command -v node &> /dev/null; then
         echo "Node.js 설치 중..."
         if command -v apt-get &> /dev/null; then
-            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
             sudo apt-get install -y nodejs
         elif command -v yum &> /dev/null; then
-            curl -fsSL https://rpm.nodesource.com/setup_18.x | sudo bash -
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
             sudo yum install -y nodejs
         else
             echo "오류: Node.js를 설치할 수 없습니다."

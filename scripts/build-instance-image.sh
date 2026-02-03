@@ -4,7 +4,7 @@
 # 사용법: 이 저장소를 인스턴스에 클론한 뒤, sudo ./scripts/build-instance-image.sh
 #
 # 수행 내용:
-#   1. React 빌드 환경 (Node.js 18, npm)
+#   1. React 빌드 환경 (Node.js 20, npm)
 #   2. nginx 설치 및 배포용 설정
 #   3. Promtail 설치 및 /opt/promtail/promtail-config.yaml 구성
 #   4. Telegraf 설치 및 /opt/telegraf/telegraf.conf 구성
@@ -31,7 +31,7 @@ echo "저장소 루트: $REPO_ROOT"
 echo ""
 
 # ============================================================
-# 1. React 빌드 환경 (Node.js 18, npm)
+# 1. React 빌드 환경 (Node.js 20, npm)
 # ============================================================
 echo "[1/4] React 빌드 환경 설치"
 
@@ -40,8 +40,8 @@ apt-get update -qq
 apt-get install -y -qq curl ca-certificates gnupg unzip
 
 if ! command -v node &> /dev/null; then
-    echo "Node.js 18 설치 중..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+    echo "Node.js 20 설치 중..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     apt-get install -y nodejs
 fi
 
@@ -117,7 +117,7 @@ server:
 positions:
   filename: /opt/promtail/positions.yaml
 clients:
-  - url: http://localhost:3100/loki/api/v1/push
+  - url: http://${LOKI_URL}:3100/loki/api/v1/push
 scrape_configs:
   - job_name: nginx-access
     static_configs:
