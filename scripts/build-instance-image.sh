@@ -5,11 +5,14 @@
 #
 # 수행 내용:
 #   1. React 빌드 환경 (Node.js 20, npm)
-#   2. nginx 설치 및 배포용 설정
-#   3. Promtail 설치 및 /opt/promtail/promtail-config.yaml 구성
-#   4. Telegraf 설치 및 /opt/telegraf/telegraf.conf 구성
+#   2. React 앱 빌드 (dist 생성)
+#   3. nginx 설치 및 빌드된 앱 배포
+#   4. Promtail 설치 및 /opt/promtail/promtail-config.yaml 구성
+#   5. Telegraf 설치 및 /opt/telegraf/telegraf.conf 구성
 #
-# 배포 시: deploy.sh 로 앱을 배포하고, 백엔드 주소를 설정하세요.
+# 주의: nginx.conf의 백엔드 주소는 기본값(192.168.2.55)으로 설정됩니다.
+#       환경에 맞게 /etc/nginx/sites-available/photo-album 을 수정하거나
+#       deploy.sh를 사용하세요.
 
 set -e
 
@@ -49,31 +52,84 @@ echo "  Node: $(node -v)  npm: $(npm -v)"
 echo ""
 
 # ============================================================
-# 2. nginx 설치 및 배포용 설정
+# 2. React 앱 빌드 및 배포
 # ============================================================
-echo "[2/4] nginx 설치 및 설정"
+echo "[2/4] React 앱 빌드"
+
+cd "$REPO_ROOT"
+
+# 의존성 설치
+if [ -f "package.json" ]; then
+    echo "  의존성 설치 중..."
+    npm ci --silent
+    
+    # 빌드 수행
+    echo "  React 앱 빌드 중..."
+    export VITE_API_BASE_URL="/api"
+    npm run build
+    
+    if [ ! -d "dist" ]; then
+        echo "  오류: dist 디렉토리가 생성되지 않았습니다."
+        exit 1
+    fi
+    
+    echo "  빌드 완료: $(du -sh dist | cut -f1)"
+else
+    echo "  경고: package.json을 찾을 수 없습니다. 빌드를 건너뜁니다."
+fi
+
+echo ""
+
+# ============================================================
+# 3. nginx 설치 및 앱 배포
+# ============================================================
+echo "[3/4] nginx 설치 및 앱 배포"
 
 apt-get install -y -qq nginx
 
 WEB_ROOT="/var/www/photo-album"
 mkdir -p "$WEB_ROOT"
-# placeholder 페이지 (실제 앱은 deploy.sh로 배포)
-echo "<!DOCTYPE html><html><body>Photo Album - deploy with deploy.sh</body></html>" > "$WEB_ROOT/index.html"
+
+# 빌드된 파일 배포
+if [ -d "$REPO_ROOT/dist" ]; then
+    echo "  빌드된 파일을 $WEB_ROOT 에 배포 중..."
+    cp -r "$REPO_ROOT/dist/"* "$WEB_ROOT/"
+    echo "  배포 완료"
+else
+    echo "  경고: dist 디렉토리가 없습니다. placeholder 페이지를 생성합니다."
+    echo "<!DOCTYPE html><html><body>Photo Album - deploy with deploy.sh</body></html>" > "$WEB_ROOT/index.html"
+fi
+
 chown -R www-data:www-data "$WEB_ROOT"
 chmod -R 755 "$WEB_ROOT"
 
-# nginx 설정 (placeholder 유지 - deploy.sh에서 백엔드 주소 치환)
+# nginx 설정
 NGINX_CONF="/etc/nginx/sites-available/photo-album"
 NGINX_ENABLED="/etc/nginx/sites-enabled/photo-album"
 
 if [ -f "$REPO_ROOT/nginx.conf" ]; then
     cp "$REPO_ROOT/nginx.conf" "$NGINX_CONF"
+    
+    # 백엔드 주소가 placeholder로 되어 있다면 기본값 설정
+    # (나중에 deploy.sh나 수동으로 수정 필요)
+    if grep -q "__BACKEND_UPSTREAM__" "$NGINX_CONF"; then
+        echo "  경고: nginx.conf에 placeholder가 있습니다. 기본값(192.168.2.55)으로 설정합니다."
+        sed -i "s|__BACKEND_UPSTREAM__|192.168.2.55|g" "$NGINX_CONF"
+        sed -i "s|__BACKEND_HOST__|192.168.2.55|g" "$NGINX_CONF"
+    fi
+    
     if [ ! -L "$NGINX_ENABLED" ]; then
         ln -sf "$NGINX_CONF" "$NGINX_ENABLED"
     fi
     rm -f /etc/nginx/sites-enabled/default
-    nginx -t && systemctl enable nginx
-    echo "  nginx 설정: $NGINX_CONF (백엔드 주소는 deploy.sh에서 치환)"
+    
+    # nginx 설정 검증
+    if nginx -t 2>/dev/null; then
+        systemctl enable nginx
+        echo "  nginx 설정 완료: $NGINX_CONF"
+    else
+        echo "  경고: nginx 설정 검증 실패. 수동으로 확인하세요."
+    fi
 else
     echo "  경고: nginx.conf 없음, 기본 설정 유지"
 fi
@@ -81,9 +137,9 @@ fi
 echo ""
 
 # ============================================================
-# 3. Promtail 설치 및 /opt/promtail 구성
+# 4. Promtail 설치 및 /opt/promtail 구성
 # ============================================================
-echo "[3/4] Promtail 설치 및 구성"
+echo "[4/5] Promtail 설치 및 구성"
 
 PROMTAIL_DIR="/opt/promtail"
 PROMTAIL_CONFIG="$PROMTAIL_DIR/promtail-config.yaml"
@@ -106,6 +162,17 @@ fi
 # 설정 파일: conf/promtail-config.yaml → /opt/promtail/promtail-config.yaml
 if [ -f "$CONF_DIR/promtail-config.yaml" ]; then
     cp "$CONF_DIR/promtail-config.yaml" "$PROMTAIL_CONFIG"
+    
+    # hostname -I로 인스턴스 IP 가져와서 설정에 반영
+    HOST_IP=$(hostname -I | awk '{print $1}')
+    if [ -n "$HOST_IP" ]; then
+        sed -i "s|__HOST_IP__|$HOST_IP|g" "$PROMTAIL_CONFIG"
+        echo "  인스턴스 IP: $HOST_IP"
+    else
+        echo "  경고: 인스턴스 IP를 가져올 수 없습니다."
+        sed -i "s|__HOST_IP__|unknown|g" "$PROMTAIL_CONFIG"
+    fi
+    
     chmod 644 "$PROMTAIL_CONFIG"
     echo "  설정: $PROMTAIL_CONFIG"
 else
@@ -161,9 +228,9 @@ echo "  Promtail 서비스 등록 완료 (시작은 인스턴스 부팅 시 또�
 echo ""
 
 # ============================================================
-# 4. Telegraf 설치 및 /opt/telegraf 구성
+# 5. Telegraf 설치 및 /opt/telegraf 구성
 # ============================================================
-echo "[4/4] Telegraf 설치 및 구성"
+echo "[5/5] Telegraf 설치 및 구성"
 
 TELEGRAF_DIR="/opt/telegraf"
 TELEGRAF_CONFIG="$TELEGRAF_DIR/telegraf.conf"
@@ -212,14 +279,17 @@ echo "인스턴스 이미지 빌드 완료"
 echo "=========================================="
 echo ""
 echo "설치 요약:"
-echo "  - Node.js: $(node -v) (React 빌드용)"
+echo "  - Node.js: $(node -v)"
 echo "  - nginx: $(nginx -v 2>&1)"
+echo "  - 앱 배포: $WEB_ROOT"
 echo "  - Promtail: $PROMTAIL_DIR (config: $PROMTAIL_CONFIG)"
 echo "  - Telegraf: $TELEGRAF_DIR (config: $TELEGRAF_CONFIG)"
 echo ""
 echo "다음 단계:"
 echo "  1. 이 인스턴스로 AMI/이미지를 생성하세요."
-echo "  2. 새 인스턴스 기동 후 압축 파일을 /opt/photo-frontend/에 업로드하고 deploy.sh 실행."
-echo "  3. deploy.sh 상단에서 BACKEND_UPSTREAM, BACKEND_HOST 를 해당 환경에 맞게 수정하세요."
-echo "  4. 필요 시 Promtail LOKI_URL, Telegraf 출력(예: InfluxDB)을 수정하세요."
+echo "  2. 새 인스턴스 기동 후:"
+echo "     - nginx가 자동으로 시작됩니다 (앱이 이미 배포되어 있음)"
+echo "     - 백엔드 주소 변경 시: /etc/nginx/sites-available/photo-album 수정 후 nginx reload"
+echo "     - 또는 deploy.sh를 사용하여 재배포"
+echo "  3. 필요 시 Promtail LOKI_URL, Telegraf 출력(예: InfluxDB)을 수정하세요."
 echo ""
