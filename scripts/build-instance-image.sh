@@ -1,18 +1,20 @@
 #!/bin/bash
 #
 # 우분투 인스턴스 이미지 빌드 스크립트
-# 사용법: 이 저장소를 인스턴스에 클론한 뒤, sudo ./scripts/build-instance-image.sh
+#
+# 사용법: sudo ./scripts/setup.sh (권장)
+#         또는 환경 변수 설정 후 sudo -E ./scripts/build-instance-image.sh
 #
 # 수행 내용:
 #   1. React 빌드 환경 (Node.js 20, npm)
 #   2. React 앱 빌드 (dist 생성)
-#   3. nginx 설치 및 빌드된 앱 배포
-#   4. Promtail 설치 및 /opt/promtail/promtail-config.yaml 구성
-#   5. Telegraf 설치 및 /opt/telegraf/telegraf.conf 구성
+#   3. nginx 설치, 설정, 시작
+#   4. Promtail 설치, 설정, 시작
+#   5. Telegraf 설치, 설정, 시작
 #
-# 주의: nginx.conf의 백엔드 주소는 기본값(192.168.2.55)으로 설정됩니다.
-#       환경에 맞게 /etc/nginx/sites-available/photo-album 을 수정하거나
-#       deploy.sh를 사용하세요.
+# 필요 환경 변수 (setup.sh에서 설정):
+#   BACKEND_HOST, LOKI_URL, LOKI_LOGS_APP, LOKI_LOGS_ENV
+#   INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, INFLUX_APP, INFLUX_ENV
 
 set -e
 
@@ -32,38 +34,60 @@ echo "우분투 인스턴스 이미지 빌드"
 echo "=========================================="
 echo "저장소 루트: $REPO_ROOT"
 echo ""
+echo "환경 변수 확인:"
+echo "  BACKEND_HOST=${BACKEND_HOST:-172.16.2.46 (기본값)}"
+echo "  LOKI_URL=${LOKI_URL:-(기본값 사용)}"
+echo "  LOKI_LOGS_APP=${LOKI_LOGS_APP:-photo-frontend (기본값)}"
+echo "  LOKI_LOGS_ENV=${LOKI_LOGS_ENV:-production (기본값)}"
+echo "  INFLUX_URL=${INFLUX_URL:-(기본값 사용)}"
+echo "  INFLUX_ORG=${INFLUX_ORG:-nhn-cloud (기본값)}"
+echo "  INFLUX_BUCKET=${INFLUX_BUCKET:-monitoring (기본값)}"
+echo ""
 
 # ============================================================
-# 1. React 빌드 환경 (Node.js 20, npm)
+# 1. 패키지 설치 (한 번에 모두 설치)
 # ============================================================
-echo "[1/4] React 빌드 환경 설치"
+echo "[1/5] 패키지 설치"
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq curl ca-certificates gnupg unzip
 
+# Node.js 저장소 추가 (필요한 경우)
 if ! command -v node &> /dev/null; then
-    echo "Node.js 20 설치 중..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y nodejs
+    echo "  Node.js 저장소 추가 중..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
 fi
+
+# InfluxData 저장소 추가 (필요한 경우)
+if [ ! -f /etc/apt/sources.list.d/influxdata.list ]; then
+    echo "  InfluxData 저장소 추가 중..."
+    curl -sSL https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/influxdata-archive.gpg 2>/dev/null
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/influxdata-archive.gpg] https://repos.influxdata.com/debian stable main" > /etc/apt/sources.list.d/influxdata.list
+fi
+
+# apt-get update 한 번만 실행
+echo "  패키지 목록 업데이트 중..."
+apt-get update -qq
+
+# 모든 패키지 한 번에 설치
+echo "  패키지 설치 중..."
+apt-get install -y -qq \
+    curl ca-certificates gnupg unzip gettext-base \
+    nginx nodejs telegraf
 
 echo "  Node: $(node -v)  npm: $(npm -v)"
 echo ""
 
 # ============================================================
-# 2. React 앱 빌드 및 배포
+# 2. React 앱 빌드
 # ============================================================
-echo "[2/4] React 앱 빌드"
+echo "[2/5] React 앱 빌드"
 
 cd "$REPO_ROOT"
 
-# 의존성 설치
 if [ -f "package.json" ]; then
     echo "  의존성 설치 중..."
-    npm ci --silent
+    npm ci --silent --prefer-offline
     
-    # 빌드 수행
     echo "  React 앱 빌드 중..."
     export VITE_API_BASE_URL="/api"
     npm run build
@@ -81,11 +105,9 @@ fi
 echo ""
 
 # ============================================================
-# 3. nginx 설치 및 앱 배포
+# 3. nginx 설정 및 앱 배포
 # ============================================================
-echo "[3/4] nginx 설치 및 앱 배포"
-
-apt-get install -y -qq nginx
+echo "[3/5] nginx 설정 및 앱 배포"
 
 WEB_ROOT="/var/www/photo-album"
 mkdir -p "$WEB_ROOT"
@@ -108,27 +130,26 @@ NGINX_CONF="/etc/nginx/sites-available/photo-album"
 NGINX_ENABLED="/etc/nginx/sites-enabled/photo-album"
 
 if [ -f "$REPO_ROOT/nginx.conf" ]; then
-    cp "$REPO_ROOT/nginx.conf" "$NGINX_CONF"
+    # 환경 변수로 백엔드 주소 설정 (기본값 사용)
+    export BACKEND_HOST="${BACKEND_HOST:-172.16.2.46}"
+    echo "  백엔드 주소: $BACKEND_HOST"
     
-    # 백엔드 주소가 placeholder로 되어 있다면 기본값 설정
-    # (나중에 deploy.sh나 수동으로 수정 필요)
-    if grep -q "__BACKEND_UPSTREAM__" "$NGINX_CONF"; then
-        echo "  경고: nginx.conf에 placeholder가 있습니다. 기본값(192.168.2.55)으로 설정합니다."
-        sed -i "s|__BACKEND_UPSTREAM__|192.168.2.55|g" "$NGINX_CONF"
-        sed -i "s|__BACKEND_HOST__|192.168.2.55|g" "$NGINX_CONF"
-    fi
+    # envsubst로 환경 변수 치환
+    envsubst '${BACKEND_HOST}' < "$REPO_ROOT/nginx.conf" > "$NGINX_CONF"
     
     if [ ! -L "$NGINX_ENABLED" ]; then
         ln -sf "$NGINX_CONF" "$NGINX_ENABLED"
     fi
     rm -f /etc/nginx/sites-enabled/default
     
-    # nginx 설정 검증
-    if nginx -t 2>/dev/null; then
+    # nginx 설정 검증 및 시작
+    if nginx -t; then
         systemctl enable nginx
-        echo "  nginx 설정 완료: $NGINX_CONF"
+        systemctl restart nginx
+        echo "  nginx 설정 완료 및 시작: $NGINX_CONF"
     else
-        echo "  경고: nginx 설정 검증 실패. 수동으로 확인하세요."
+        echo "  오류: nginx 설정 검증 실패"
+        exit 1
     fi
 else
     echo "  경고: nginx.conf 없음, 기본 설정 유지"
@@ -137,9 +158,9 @@ fi
 echo ""
 
 # ============================================================
-# 4. Promtail 설치 및 /opt/promtail 구성
+# 4. Promtail 설치 및 설정
 # ============================================================
-echo "[4/5] Promtail 설치 및 구성"
+echo "[4/5] Promtail 설치 및 설정"
 
 PROMTAIL_DIR="/opt/promtail"
 PROMTAIL_CONFIG="$PROMTAIL_DIR/promtail-config.yaml"
@@ -147,7 +168,7 @@ PROMTAIL_VERSION="${PROMTAIL_VERSION:-2.9.5}"
 
 mkdir -p "$PROMTAIL_DIR"
 
-# 바이너리 다운로드 (이미 있으면 스킵)
+# Promtail 다운로드 (이미 있으면 스킵)
 if [ ! -x "$PROMTAIL_DIR/promtail" ]; then
     echo "  Promtail ${PROMTAIL_VERSION} 다운로드 중..."
     cd /tmp
@@ -157,24 +178,40 @@ if [ ! -x "$PROMTAIL_DIR/promtail" ]; then
     chmod +x "$PROMTAIL_DIR/promtail"
     rm -f promtail.zip
     cd - > /dev/null
+    echo "  Promtail 다운로드 완료"
 fi
 
-# 설정 파일: conf/promtail-config.yaml → /opt/promtail/promtail-config.yaml
+# 템플릿 파일: conf/promtail-config.yaml → /opt/promtail/promtail-config.yaml.template
+PROMTAIL_TEMPLATE="$PROMTAIL_DIR/promtail-config.yaml.template"
 if [ -f "$CONF_DIR/promtail-config.yaml" ]; then
-    cp "$CONF_DIR/promtail-config.yaml" "$PROMTAIL_CONFIG"
+    cp "$CONF_DIR/promtail-config.yaml" "$PROMTAIL_TEMPLATE"
+    chmod 644 "$PROMTAIL_TEMPLATE"
+    echo "  템플릿: $PROMTAIL_TEMPLATE"
     
-    # hostname -I로 인스턴스 IP 가져와서 설정에 반영
-    HOST_IP=$(hostname -I | awk '{print $1}')
-    if [ -n "$HOST_IP" ]; then
-        sed -i "s|__HOST_IP__|$HOST_IP|g" "$PROMTAIL_CONFIG"
-        echo "  인스턴스 IP: $HOST_IP"
-    else
-        echo "  경고: 인스턴스 IP를 가져올 수 없습니다."
-        sed -i "s|__HOST_IP__|unknown|g" "$PROMTAIL_CONFIG"
+    # 환경 변수 파일 생성 (/etc/default/promtail)
+    cat > /etc/default/promtail << 'ENVEOF'
+# Promtail 환경 변수 설정
+# systemctl restart promtail 하면 이 파일의 값이 적용됩니다.
+# INSTANCE_IP는 서비스 시작 시 자동으로 감지됩니다.
+
+# Loki 설정
+LOKI_URL=http://172.16.4.20:3100/loki/api/v1/push
+LOKI_LOGS_APP=photo-frontend
+LOKI_LOGS_ENV=production
+ENVEOF
+
+    # 빌드 시 전달된 환경 변수가 있으면 덮어쓰기
+    if [ -n "$LOKI_URL" ]; then
+        sed -i "s|^LOKI_URL=.*|LOKI_URL=$LOKI_URL|" /etc/default/promtail
+    fi
+    if [ -n "$LOKI_LOGS_APP" ]; then
+        sed -i "s|^LOKI_LOGS_APP=.*|LOKI_LOGS_APP=$LOKI_LOGS_APP|" /etc/default/promtail
+    fi
+    if [ -n "$LOKI_LOGS_ENV" ]; then
+        sed -i "s|^LOKI_LOGS_ENV=.*|LOKI_LOGS_ENV=$LOKI_LOGS_ENV|" /etc/default/promtail
     fi
     
-    chmod 644 "$PROMTAIL_CONFIG"
-    echo "  설정: $PROMTAIL_CONFIG"
+    echo "  환경변수: /etc/default/promtail"
 else
     echo "  경고: conf/promtail-config.yaml 없음. 기본 설정을 생성합니다."
     cat > "$PROMTAIL_CONFIG" << 'PROMTAIL_EOF'
@@ -205,8 +242,8 @@ fi
 touch "$PROMTAIL_DIR/positions.yaml"
 chown -R root:root "$PROMTAIL_DIR"
 
-# systemd 서비스
-cat > /etc/systemd/system/promtail.service << EOF
+# systemd 서비스 (환경 변수를 런타임에 적용)
+cat > /etc/systemd/system/promtail.service << 'EOF'
 [Unit]
 Description=Promtail - log shipper for Loki
 After=network.target nginx.service
@@ -214,7 +251,12 @@ After=network.target nginx.service
 [Service]
 Type=simple
 User=root
-ExecStart=$PROMTAIL_DIR/promtail -config.file=$PROMTAIL_CONFIG
+EnvironmentFile=/etc/default/promtail
+
+# 시작 전에 환경 변수로 설정 파일 생성 (INSTANCE_IP는 동적으로 감지)
+ExecStartPre=/bin/bash -c 'set -a && source /etc/default/promtail && set +a && export INSTANCE_IP=$(hostname -I | cut -d" " -f1) && envsubst < /opt/promtail/promtail-config.yaml.template > /opt/promtail/promtail-config.yaml'
+
+ExecStart=/opt/promtail/promtail -config.file=/opt/promtail/promtail-config.yaml
 Restart=on-failure
 RestartSec=5
 
@@ -224,72 +266,129 @@ EOF
 
 systemctl daemon-reload
 systemctl enable promtail
-echo "  Promtail 서비스 등록 완료 (시작은 인스턴스 부팅 시 또는 수동 start)"
+systemctl start promtail
+echo "  Promtail 서비스 시작 완료"
 echo ""
 
 # ============================================================
-# 5. Telegraf 설치 및 /opt/telegraf 구성
+# 5. Telegraf 설정
 # ============================================================
-echo "[5/5] Telegraf 설치 및 구성"
+echo "[5/5] Telegraf 설정"
 
 TELEGRAF_DIR="/opt/telegraf"
 TELEGRAF_CONFIG="$TELEGRAF_DIR/telegraf.conf"
 
 mkdir -p "$TELEGRAF_DIR"
 
-# InfluxData APT 저장소 추가
-if [ ! -f /etc/apt/sources.list.d/influxdata.list ]; then
-    curl -sSL https://repos.influxdata.com/influxdata-archive.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/influxdata-archive.gpg
-    echo "deb [signed-by=/etc/apt/trusted.gpg.d/influxdata-archive.gpg] https://repos.influxdata.com/debian stable main" > /etc/apt/sources.list.d/influxdata.list
-    apt-get update -qq
-fi
-
-if ! command -v telegraf &> /dev/null; then
-    apt-get install -y -qq telegraf
-fi
-
-# 설정 파일: conf/telegraf.conf → /opt/telegraf/telegraf.conf
+# 템플릿 파일: conf/telegraf.conf → /opt/telegraf/telegraf.conf.template
+TELEGRAF_TEMPLATE="$TELEGRAF_DIR/telegraf.conf.template"
 if [ -f "$CONF_DIR/telegraf.conf" ]; then
-    cp "$CONF_DIR/telegraf.conf" "$TELEGRAF_CONFIG"
-    chmod 644 "$TELEGRAF_CONFIG"
-    echo "  설정: $TELEGRAF_CONFIG"
+    cp "$CONF_DIR/telegraf.conf" "$TELEGRAF_TEMPLATE"
+    chmod 644 "$TELEGRAF_TEMPLATE"
+    echo "  템플릿: $TELEGRAF_TEMPLATE"
+    
+    # 환경 변수 파일 생성 (/etc/default/telegraf)
+    cat > /etc/default/telegraf << 'ENVEOF'
+# Telegraf 환경 변수 설정
+# systemctl restart telegraf 하면 이 파일의 값이 적용됩니다.
+# INSTANCE_IP는 서비스 시작 시 자동으로 감지됩니다.
+
+# InfluxDB 설정
+INFLUX_URL=http://172.16.4.20:8086
+INFLUX_TOKEN=your-token-here
+INFLUX_ORG=nhn-cloud
+INFLUX_BUCKET=monitoring
+INFLUX_APP=photo-frontend
+INFLUX_ENV=production
+ENVEOF
+
+    # 빌드 시 전달된 환경 변수가 있으면 덮어쓰기
+    if [ -n "$INFLUX_URL" ]; then
+        sed -i "s|^INFLUX_URL=.*|INFLUX_URL=$INFLUX_URL|" /etc/default/telegraf
+    fi
+    if [ -n "$INFLUX_TOKEN" ]; then
+        sed -i "s|^INFLUX_TOKEN=.*|INFLUX_TOKEN=$INFLUX_TOKEN|" /etc/default/telegraf
+    fi
+    if [ -n "$INFLUX_ORG" ]; then
+        sed -i "s|^INFLUX_ORG=.*|INFLUX_ORG=$INFLUX_ORG|" /etc/default/telegraf
+    fi
+    if [ -n "$INFLUX_BUCKET" ]; then
+        sed -i "s|^INFLUX_BUCKET=.*|INFLUX_BUCKET=$INFLUX_BUCKET|" /etc/default/telegraf
+    fi
+    if [ -n "$INFLUX_APP" ]; then
+        sed -i "s|^INFLUX_APP=.*|INFLUX_APP=$INFLUX_APP|" /etc/default/telegraf
+    fi
+    if [ -n "$INFLUX_ENV" ]; then
+        sed -i "s|^INFLUX_ENV=.*|INFLUX_ENV=$INFLUX_ENV|" /etc/default/telegraf
+    fi
+    
+    echo "  환경변수: /etc/default/telegraf"
 else
     echo "  경고: conf/telegraf.conf 없음. 기본 설정을 생성합니다."
-    telegraf --input-filter nginx --output-filter file config > "$TELEGRAF_CONFIG" 2>/dev/null || true
+    telegraf --input-filter nginx --output-filter file config > "$TELEGRAF_TEMPLATE" 2>/dev/null || true
 fi
 
-# systemd override: 기본 설정 대신 /opt/telegraf/telegraf.conf 사용
+# systemd override: 환경 변수를 런타임에 적용
 mkdir -p /etc/systemd/system/telegraf.service.d
-cat > /etc/systemd/system/telegraf.service.d/override.conf << EOF
+cat > /etc/systemd/system/telegraf.service.d/override.conf << 'EOF'
 [Service]
+EnvironmentFile=/etc/default/telegraf
+
+# 시작 전에 환경 변수로 설정 파일 생성 (INSTANCE_IP는 동적으로 감지)
+ExecStartPre=/bin/bash -c 'set -a && source /etc/default/telegraf && set +a && export INSTANCE_IP=$(hostname -I | cut -d" " -f1) && envsubst < /opt/telegraf/telegraf.conf.template > /opt/telegraf/telegraf.conf'
+
 ExecStart=
-ExecStart=/usr/bin/telegraf -config $TELEGRAF_CONFIG
+ExecStart=/usr/bin/telegraf -config /opt/telegraf/telegraf.conf
 EOF
 
 systemctl daemon-reload
 systemctl enable telegraf
-echo "  Telegraf 서비스 등록 완료 (시작은 인스턴스 부팅 시 또는 수동 start)"
+systemctl start telegraf
+echo "  Telegraf 서비스 시작 완료"
+echo ""
+
+# ============================================================
+# 서비스 상태 확인
+# ============================================================
+echo "=========================================="
+echo "서비스 상태 확인"
+echo "=========================================="
+echo ""
+echo "nginx:"
+systemctl is-active nginx && echo "  상태: 실행 중" || echo "  상태: 중지됨"
+echo ""
+echo "promtail:"
+systemctl is-active promtail && echo "  상태: 실행 중" || echo "  상태: 중지됨"
+echo ""
+echo "telegraf:"
+systemctl is-active telegraf && echo "  상태: 실행 중" || echo "  상태: 중지됨"
 echo ""
 
 # ============================================================
 # 정리 및 안내
 # ============================================================
 echo "=========================================="
-echo "인스턴스 이미지 빌드 완료"
+echo "인스턴스 빌드 완료"
 echo "=========================================="
 echo ""
 echo "설치 요약:"
 echo "  - Node.js: $(node -v)"
 echo "  - nginx: $(nginx -v 2>&1)"
 echo "  - 앱 배포: $WEB_ROOT"
-echo "  - Promtail: $PROMTAIL_DIR (config: $PROMTAIL_CONFIG)"
-echo "  - Telegraf: $TELEGRAF_DIR (config: $TELEGRAF_CONFIG)"
 echo ""
-echo "다음 단계:"
-echo "  1. 이 인스턴스로 AMI/이미지를 생성하세요."
-echo "  2. 새 인스턴스 기동 후:"
-echo "     - nginx가 자동으로 시작됩니다 (앱이 이미 배포되어 있음)"
-echo "     - 백엔드 주소 변경 시: /etc/nginx/sites-available/photo-album 수정 후 nginx reload"
-echo "     - 또는 deploy.sh를 사용하여 재배포"
-echo "  3. 필요 시 Promtail LOKI_URL, Telegraf 출력(예: InfluxDB)을 수정하세요."
+echo "적용된 설정:"
+echo "  - BACKEND_HOST: $BACKEND_HOST"
+echo "  - LOKI_URL: $(grep '^LOKI_URL=' /etc/default/promtail | cut -d= -f2)"
+echo "  - INFLUX_URL: $(grep '^INFLUX_URL=' /etc/default/telegraf | cut -d= -f2)"
+echo "  - INSTANCE_IP: $(hostname -I | cut -d' ' -f1)"
+echo ""
+echo "설정 파일 위치:"
+echo "  - nginx: /etc/nginx/sites-available/photo-album"
+echo "  - Promtail: /etc/default/promtail (환경변수)"
+echo "  - Telegraf: /etc/default/telegraf (환경변수)"
+echo ""
+echo "설정 변경 후 서비스 재시작:"
+echo "  sudo systemctl restart nginx"
+echo "  sudo systemctl restart promtail"
+echo "  sudo systemctl restart telegraf"
 echo ""
