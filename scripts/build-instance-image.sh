@@ -1,20 +1,19 @@
 #!/bin/bash
 #
-# 우분투 인스턴스 이미지 빌드 스크립트
+# 인스턴스 이미지 빌드 스크립트
 #
-# 사용법: sudo ./scripts/setup.sh (권장)
-#         또는 환경 변수 설정 후 sudo -E ./scripts/build-instance-image.sh
+# 사용법: sudo ./scripts/build-instance-image.sh
+#
+# 이미지 빌드 시: 모든 다운로드·설치만 수행. 서비스는 enable만 하고 start 하지 않음.
+# 인스턴스 기동 후: 사용자가 export 한 환경 변수를 반영해 서비스 시작
+#                  (sudo -E ./scripts/start-with-env.sh)
 #
 # 수행 내용:
-#   1. React 빌드 환경 (Node.js 20, npm)
-#   2. React 앱 빌드 (dist 생성)
-#   3. nginx 설치, 설정, 시작
-#   4. Promtail 설치, 설정, 시작
-#   5. Telegraf 설치, 설정, 시작
-#
-# 필요 환경 변수 (setup.sh에서 설정):
-#   BACKEND_HOST, LOKI_URL, LOKI_LOGS_APP, LOKI_LOGS_ENV
-#   INFLUX_URL, INFLUX_TOKEN, INFLUX_ORG, INFLUX_BUCKET, INFLUX_APP, INFLUX_ENV
+#   1. 패키지 설치 (Node.js, nginx, telegraf 등)
+#   2. React 앱 빌드 (dist)
+#   3. nginx 설정 (템플릿 + /etc/default/photo-album)
+#   4. Promtail 다운로드·설정 (/etc/default/promtail)
+#   5. Telegraf 설정 (/etc/default/telegraf)
 
 set -e
 
@@ -30,18 +29,12 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 echo "=========================================="
-echo "우분투 인스턴스 이미지 빌드"
+echo "인스턴스 이미지 빌드"
 echo "=========================================="
 echo "저장소 루트: $REPO_ROOT"
 echo ""
-echo "환경 변수 확인:"
-echo "  BACKEND_HOST=${BACKEND_HOST:-172.16.2.46 (기본값)}"
-echo "  LOKI_URL=${LOKI_URL:-(기본값 사용)}"
-echo "  LOKI_LOGS_APP=${LOKI_LOGS_APP:-photo-frontend (기본값)}"
-echo "  LOKI_LOGS_ENV=${LOKI_LOGS_ENV:-production (기본값)}"
-echo "  INFLUX_URL=${INFLUX_URL:-(기본값 사용)}"
-echo "  INFLUX_ORG=${INFLUX_ORG:-nhn-cloud (기본값)}"
-echo "  INFLUX_BUCKET=${INFLUX_BUCKET:-monitoring (기본값)}"
+echo "※ 이미지 빌드 시: 다운로드·설치만 하고, 서비스는 시작하지 않습니다."
+echo "※ 인스턴스 기동 후: /etc/default/* 설정한 뒤 서비스를 시작합니다."
 echo ""
 
 # ============================================================
@@ -125,16 +118,51 @@ fi
 chown -R www-data:www-data "$WEB_ROOT"
 chmod -R 755 "$WEB_ROOT"
 
-# nginx 설정
+# nginx 설정 (템플릿 + 환경 변수)
+NGINX_TEMPLATE_DIR="/opt/nginx"
 NGINX_CONF="/etc/nginx/sites-available/photo-album"
 NGINX_ENABLED="/etc/nginx/sites-enabled/photo-album"
 
 if [ -f "$REPO_ROOT/nginx.conf" ]; then
-    # 환경 변수로 백엔드 주소 설정 (기본값 사용)
-    export BACKEND_HOST="${BACKEND_HOST:-172.16.2.46}"
-    echo "  백엔드 주소: $BACKEND_HOST"
+    mkdir -p "$NGINX_TEMPLATE_DIR"
+    cp "$REPO_ROOT/nginx.conf" "$NGINX_TEMPLATE_DIR/photo-album.conf.template"
+    chmod 644 "$NGINX_TEMPLATE_DIR/photo-album.conf.template"
+    echo "  템플릿: $NGINX_TEMPLATE_DIR/photo-album.conf.template"
     
-    # envsubst로 환경 변수 치환
+    # 환경 변수 파일 (인스턴스 기동 후 여기만 수정)
+    cat > /etc/default/photo-album << 'ENVEOF'
+# nginx 백엔드 주소 (인스턴스 기동 후 수정)
+BACKEND_HOST=172.16.2.46
+ENVEOF
+    echo "  환경변수: /etc/default/photo-album"
+    
+    # 부팅 시 템플릿 → 설정 파일 생성 (oneshot)
+    cat > /etc/systemd/system/photo-album-nginx-config.service << 'EOF'
+[Unit]
+Description=Generate nginx config for photo-album from env
+Before=nginx.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'set -a && source /etc/default/photo-album && set +a && envsubst "\${BACKEND_HOST}" < /opt/nginx/photo-album.conf.template > /etc/nginx/sites-available/photo-album'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # nginx가 이 서비스 이후에 시작하도록
+    mkdir -p /etc/systemd/system/nginx.service.d
+    cat > /etc/systemd/system/nginx.service.d/photo-album.conf << 'EOF'
+[Unit]
+After=photo-album-nginx-config.service
+Requires=photo-album-nginx-config.service
+EOF
+    
+    # 최초 1회 설정 생성 (시작은 하지 않음. 인스턴스 기동 후 환경 변수 설정하고 시작)
+    set -a
+    source /etc/default/photo-album
+    set +a
     envsubst '${BACKEND_HOST}' < "$REPO_ROOT/nginx.conf" > "$NGINX_CONF"
     
     if [ ! -L "$NGINX_ENABLED" ]; then
@@ -142,11 +170,12 @@ if [ -f "$REPO_ROOT/nginx.conf" ]; then
     fi
     rm -f /etc/nginx/sites-enabled/default
     
-    # nginx 설정 검증 및 시작
-    if nginx -t; then
-        systemctl enable nginx
-        systemctl restart nginx
-        echo "  nginx 설정 완료 및 시작: $NGINX_CONF"
+    systemctl daemon-reload
+    systemctl enable photo-album-nginx-config.service
+    systemctl enable nginx
+    
+    if nginx -t 2>/dev/null; then
+        echo "  nginx 설정 완료 (enable만 함, start는 인스턴스 기동 후)"
     else
         echo "  오류: nginx 설정 검증 실패"
         exit 1
@@ -266,8 +295,7 @@ EOF
 
 systemctl daemon-reload
 systemctl enable promtail
-systemctl start promtail
-echo "  Promtail 서비스 시작 완료"
+echo "  Promtail 설정 완료 (enable만 함, start는 인스턴스 기동 후)"
 echo ""
 
 # ============================================================
@@ -343,25 +371,17 @@ EOF
 
 systemctl daemon-reload
 systemctl enable telegraf
-systemctl start telegraf
-echo "  Telegraf 서비스 시작 완료"
+echo "  Telegraf 설정 완료 (enable만 함, start는 인스턴스 기동 후)"
 echo ""
 
 # ============================================================
-# 서비스 상태 확인
+# 안내
 # ============================================================
 echo "=========================================="
-echo "서비스 상태 확인"
+echo "서비스 상태"
 echo "=========================================="
 echo ""
-echo "nginx:"
-systemctl is-active nginx && echo "  상태: 실행 중" || echo "  상태: 중지됨"
-echo ""
-echo "promtail:"
-systemctl is-active promtail && echo "  상태: 실행 중" || echo "  상태: 중지됨"
-echo ""
-echo "telegraf:"
-systemctl is-active telegraf && echo "  상태: 실행 중" || echo "  상태: 중지됨"
+echo "nginx, promtail, telegraf: enable만 됨 (시작하지 않음)"
 echo ""
 
 # ============================================================
@@ -376,19 +396,16 @@ echo "  - Node.js: $(node -v)"
 echo "  - nginx: $(nginx -v 2>&1)"
 echo "  - 앱 배포: $WEB_ROOT"
 echo ""
-echo "적용된 설정:"
-echo "  - BACKEND_HOST: $BACKEND_HOST"
-echo "  - LOKI_URL: $(grep '^LOKI_URL=' /etc/default/promtail | cut -d= -f2)"
-echo "  - INFLUX_URL: $(grep '^INFLUX_URL=' /etc/default/telegraf | cut -d= -f2)"
-echo "  - INSTANCE_IP: $(hostname -I | cut -d' ' -f1)"
+echo "=========================================="
+echo "인스턴스 기동 후"
+echo "=========================================="
 echo ""
-echo "설정 파일 위치:"
-echo "  - nginx: /etc/nginx/sites-available/photo-album"
-echo "  - Promtail: /etc/default/promtail (환경변수)"
-echo "  - Telegraf: /etc/default/telegraf (환경변수)"
+echo "환경 변수는 사용자가 export 한 뒤:"
+echo "  sudo -E ./scripts/start-with-env.sh"
 echo ""
-echo "설정 변경 후 서비스 재시작:"
-echo "  sudo systemctl restart nginx"
-echo "  sudo systemctl restart promtail"
-echo "  sudo systemctl restart telegraf"
+echo "예:"
+echo "  export BACKEND_HOST=172.16.2.46"
+echo "  export LOKI_URL=http://..."
+echo "  export INFLUX_URL=... INFLUX_TOKEN=... INFLUX_ORG=... INFLUX_BUCKET=..."
+echo "  sudo -E ./scripts/start-with-env.sh"
 echo ""
